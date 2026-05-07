@@ -21,14 +21,14 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-          pip install -q yt-dlp
+          pip install -q --upgrade "yt-dlp[default,curl-cffi]"
 
       - name: Klipi indir
         run: |
           mkdir -p output
-
-          # En kaliteli MP4 versiyonunu indir
+          # En kaliteli MP4 versiyonunu indir (Cloudflare bypass için chrome impersonation)
           yt-dlp \
+            --impersonate chrome \
             -f "bv*[ext=mp4]/b[ext=mp4]/b" \
             --no-playlist \
             --no-warnings \
