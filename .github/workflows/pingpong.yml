@@ -21,28 +21,80 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-          pip install -q --upgrade "yt-dlp[default,curl-cffi]"
+          pip install -q --upgrade "yt-dlp[default,curl-cffi]" curl_cffi
 
       - name: Klipi indir
+        env:
+          VIDEO_URL: ${{ github.event.inputs.video_url }}
         run: |
           mkdir -p output
-          # En kaliteli MP4 versiyonunu indir (Cloudflare bypass için chrome impersonation)
-          yt-dlp \
-            --impersonate chrome \
-            -f "bv*[ext=mp4]/b[ext=mp4]/b" \
-            --no-playlist \
-            --no-warnings \
-            -o "input.%(ext)s" \
-            "${{ github.event.inputs.video_url }}"
+          echo "🔗 URL: $VIDEO_URL"
 
-          # İndirilen dosyayı bul
+          # Yöntem 1: yt-dlp + Chrome 120 impersonation
+          echo ""
+          echo "🔄 Deneme 1: yt-dlp (Chrome 120)"
+          if yt-dlp \
+              --impersonate chrome-120 \
+              -f "bv*[ext=mp4]/b[ext=mp4]/b" \
+              --no-playlist \
+              -o "input.%(ext)s" \
+              "$VIDEO_URL"; then
+            echo "✅ Başarılı (Chrome 120)"
+          else
+            # Yöntem 2: yt-dlp + Safari
+            echo ""
+            echo "🔄 Deneme 2: yt-dlp (Safari)"
+            if yt-dlp \
+                --impersonate safari \
+                -f "bv*[ext=mp4]/b[ext=mp4]/b" \
+                --no-playlist \
+                -o "input.%(ext)s" \
+                "$VIDEO_URL"; then
+              echo "✅ Başarılı (Safari)"
+            else
+              # Yöntem 3: Direkt download (curl_cffi)
+              echo ""
+              echo "🔄 Deneme 3: Direkt download (curl_cffi)"
+              python3 - << 'PYEOF'
+import sys, os
+from curl_cffi import requests
+
+url = os.environ['VIDEO_URL']
+try:
+    r = requests.get(url, impersonate="chrome120", allow_redirects=True, timeout=60)
+    r.raise_for_status()
+    ct = r.headers.get('content-type', '').lower()
+    print(f"   Content-Type: {ct}")
+    print(f"   Boyut: {len(r.content) / 1024 / 1024:.1f} MB")
+    if 'video' in ct or 'octet' in ct or url.lower().split('?')[0].endswith('.mp4'):
+        with open('input.mp4', 'wb') as f:
+            f.write(r.content)
+        print("✅ Başarılı (direkt download)")
+        sys.exit(0)
+    else:
+        print(f"❌ Beklenmedik content-type, video değil")
+        sys.exit(1)
+except Exception as e:
+    print(f"❌ Hata: {e}")
+    sys.exit(1)
+PYEOF
+              if [ $? -ne 0 ]; then
+                echo ""
+                echo "::error::❌ Tüm yöntemler başarısız oldu"
+                echo "::error::💡 ÇÖZÜM: Direkt CDN linki kullan (aşağıda anlattım)"
+                exit 1
+              fi
+            fi
+          fi
+
           INPUT_FILE=$(ls input.* 2>/dev/null | head -1)
           if [ -z "$INPUT_FILE" ]; then
-            echo "::error::Dosya indirilemedi"
+            echo "::error::Dosya bulunamadı"
             exit 1
           fi
           echo "INPUT_FILE=$INPUT_FILE" >> $GITHUB_ENV
 
+          echo ""
           echo "📥 İndirilen: $INPUT_FILE"
           ffprobe -v error -select_streams v:0 \
             -show_entries stream=width,height,r_frame_rate \
