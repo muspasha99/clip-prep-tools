@@ -1,0 +1,81 @@
+name: Clip Ping-Pong Hazırlayıcı
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "Video URL'i (Pixabay/Pexels sayfası veya direkt .mp4)"
+        required: true
+      output_name:
+        description: "Çıkış dosya adı (uzantısız, boşsa otomatik isim verir)"
+        required: false
+        default: ""
+
+jobs:
+  pingpong:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Sistem hazırlığı
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          pip install -q yt-dlp
+
+      - name: Klipi indir
+        run: |
+          mkdir -p output
+
+          # En kaliteli MP4 versiyonunu indir
+          yt-dlp \
+            -f "bv*[ext=mp4]/b[ext=mp4]/b" \
+            --no-playlist \
+            --no-warnings \
+            -o "input.%(ext)s" \
+            "${{ github.event.inputs.video_url }}"
+
+          # İndirilen dosyayı bul
+          INPUT_FILE=$(ls input.* 2>/dev/null | head -1)
+          if [ -z "$INPUT_FILE" ]; then
+            echo "::error::Dosya indirilemedi"
+            exit 1
+          fi
+          echo "INPUT_FILE=$INPUT_FILE" >> $GITHUB_ENV
+
+          echo "📥 İndirilen: $INPUT_FILE"
+          ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width,height,r_frame_rate \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 "$INPUT_FILE"
+
+      - name: Ping-pong oluştur
+        run: |
+          NAME="${{ github.event.inputs.output_name }}"
+          if [ -z "$NAME" ]; then
+            NAME="pingpong_$(date +%Y%m%d_%H%M%S)"
+          fi
+          OUTPUT="output/${NAME}.mp4"
+
+          echo "🎬 Ping-pong oluşturuluyor: $OUTPUT"
+
+          ffmpeg -y -i "$INPUT_FILE" \
+            -filter_complex "[0:v]split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1[out]" \
+            -map "[out]" \
+            -c:v libx264 -preset fast -crf 18 \
+            -pix_fmt yuv420p \
+            -an \
+            "$OUTPUT"
+
+          echo "✅ Tamam"
+          ls -lh "$OUTPUT"
+          DURATION=$(ffprobe -v error -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 "$OUTPUT")
+          printf "Çıkış süresi: %.1f saniye\n" "$DURATION"
+
+      - name: Artifact olarak yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pingpong-clip
+          path: output/
+          retention-days: 7
