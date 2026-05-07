@@ -20,8 +20,8 @@ jobs:
       - name: Sistem hazırlığı
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
-          pip install -q --upgrade "yt-dlp[default,curl-cffi]" curl_cffi
+          sudo apt-get install -y -qq ffmpeg wget
+          pip install -q --upgrade "yt-dlp[default,curl-cffi]"
 
       - name: Klipi indir
         env:
@@ -29,62 +29,69 @@ jobs:
         run: |
           mkdir -p output
           echo "🔗 URL: $VIDEO_URL"
+          SUCCESS=0
 
           # Yöntem 1: yt-dlp + Chrome 120 impersonation
           echo ""
           echo "🔄 Deneme 1: yt-dlp (Chrome 120)"
-          if yt-dlp \
-              --impersonate chrome-120 \
+          if yt-dlp --impersonate chrome-120 \
               -f "bv*[ext=mp4]/b[ext=mp4]/b" \
               --no-playlist \
               -o "input.%(ext)s" \
               "$VIDEO_URL"; then
+            SUCCESS=1
             echo "✅ Başarılı (Chrome 120)"
-          else
-            # Yöntem 2: yt-dlp + Safari
+          fi
+
+          # Yöntem 2: yt-dlp + Safari impersonation
+          if [ $SUCCESS -eq 0 ]; then
             echo ""
             echo "🔄 Deneme 2: yt-dlp (Safari)"
-            if yt-dlp \
-                --impersonate safari \
+            if yt-dlp --impersonate safari \
                 -f "bv*[ext=mp4]/b[ext=mp4]/b" \
                 --no-playlist \
                 -o "input.%(ext)s" \
                 "$VIDEO_URL"; then
+              SUCCESS=1
               echo "✅ Başarılı (Safari)"
-            else
-              # Yöntem 3: Direkt download (curl_cffi)
-              echo ""
-              echo "🔄 Deneme 3: Direkt download (curl_cffi)"
-              python3 - << 'PYEOF'
-import sys, os
-from curl_cffi import requests
+            fi
+          fi
 
-url = os.environ['VIDEO_URL']
-try:
-    r = requests.get(url, impersonate="chrome120", allow_redirects=True, timeout=60)
-    r.raise_for_status()
-    ct = r.headers.get('content-type', '').lower()
-    print(f"   Content-Type: {ct}")
-    print(f"   Boyut: {len(r.content) / 1024 / 1024:.1f} MB")
-    if 'video' in ct or 'octet' in ct or url.lower().split('?')[0].endswith('.mp4'):
-        with open('input.mp4', 'wb') as f:
-            f.write(r.content)
-        print("✅ Başarılı (direkt download)")
-        sys.exit(0)
-    else:
-        print(f"❌ Beklenmedik content-type, video değil")
-        sys.exit(1)
-except Exception as e:
-    print(f"❌ Hata: {e}")
-    sys.exit(1)
-PYEOF
-              if [ $? -ne 0 ]; then
-                echo ""
-                echo "::error::❌ Tüm yöntemler başarısız oldu"
-                echo "::error::💡 ÇÖZÜM: Direkt CDN linki kullan (aşağıda anlattım)"
-                exit 1
+          # Yöntem 3: yt-dlp default (direkt CDN linkleri için)
+          if [ $SUCCESS -eq 0 ]; then
+            echo ""
+            echo "🔄 Deneme 3: yt-dlp (impersonation yok)"
+            if yt-dlp \
+                -f "bv*[ext=mp4]/b[ext=mp4]/b" \
+                --no-playlist \
+                -o "input.%(ext)s" \
+                "$VIDEO_URL"; then
+              SUCCESS=1
+              echo "✅ Başarılı (default)"
+            fi
+          fi
+
+          # Yöntem 4: wget direkt download
+          if [ $SUCCESS -eq 0 ]; then
+            echo ""
+            echo "🔄 Deneme 4: wget direkt"
+            if wget -q -O input.mp4 "$VIDEO_URL" && [ -s input.mp4 ]; then
+              if ffprobe -v error input.mp4 >/dev/null 2>&1; then
+                SUCCESS=1
+                echo "✅ Başarılı (wget)"
+              else
+                rm -f input.mp4
+                echo "⚠ wget indirdi ama geçerli video değil"
               fi
             fi
+          fi
+
+          # Hepsi başarısız
+          if [ $SUCCESS -eq 0 ]; then
+            echo ""
+            echo "::error::❌ Hiçbir yöntem işe yaramadı"
+            echo "::error::💡 ÇÖZÜM: Pixabay/Pexels'te 'Free Download' butonuna sağ tıkla → 'Bağlantı adresini kopyala' → cdn.pixabay.com/... veya videos.pexels.com/... ile başlayan direkt link kullan"
+            exit 1
           fi
 
           INPUT_FILE=$(ls input.* 2>/dev/null | head -1)
